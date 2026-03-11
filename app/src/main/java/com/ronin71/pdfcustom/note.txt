@@ -1,0 +1,39 @@
+
+
+edit pdf page
+
+- header: name (1), orientation mode (2), search text (3), editing mode (4) ( setting button )
+ + (4): open dialog
+   * column (
+    collapsed information ( have expand button ),
+    row ( rename, print ),
+    pdf to image,
+    pdf to long image,
+    merge pdf,
+    split pdf,
+    compress pdf,
+    export pdf with theme
+    )
+- body: tracking thumb scroll
+- footer: ( view mode (1), manage (2), edit (3)
+
+
+
+
+
+
+
+   * reading direction: scroll list direction
+   * background: original, paper, eye comfort, invert
+   *
+
+
+
+
+
+
+
+
+
+
+
