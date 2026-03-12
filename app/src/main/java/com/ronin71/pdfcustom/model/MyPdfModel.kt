@@ -3,6 +3,10 @@ package com.ronin71.pdfcustom.model
 import android.graphics.Bitmap
 import android.net.Uri
 
+data class MyPdfModelMain(
+    val uri: Uri,
+    val pages: ArrayList<MyPdfPage>
+)
 data class MyPdfModel(
     val id: String = "",
     val uri: Uri? = null,
