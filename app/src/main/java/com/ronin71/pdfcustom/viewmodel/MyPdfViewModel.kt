@@ -35,7 +35,9 @@ class MyPdfViewModel : ViewModel() {
 
     private var extractJob: Job? = null
     private val pdfAnalyzer = PdfAnalyzer()
-
+    fun clear() {
+        _pdfModel.value = null
+    }
     fun extractPdf(context: Context, uri: Uri) {
         extractJob?.cancel()
 

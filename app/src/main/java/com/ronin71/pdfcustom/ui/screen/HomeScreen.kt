@@ -51,8 +51,10 @@ fun HomeScreen(
     // Điều hướng khi có pdfModel
     LaunchedEffect(pdfModel) {
         pdfModel?.let {
-            Log.d("HomeScreen", "Điều hướng sang Preview")
+            Log.d("HomeScreen", "Điều hướng sang Preview: progress = ${progress.toInt()}")
             onNavigateToPreview(it)
+            viewModel.clear()
+
         }
     }
 

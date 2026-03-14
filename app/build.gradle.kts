@@ -40,8 +40,10 @@ android {
 }
 
 dependencies {
+
     implementation("com.tom-roush:pdfbox-android:2.0.27.0")
     implementation("androidx.navigation:navigation-compose:2.9.7")
+    implementation("com.google.mlkit:translate:17.0.3")
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)

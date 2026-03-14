@@ -6,6 +6,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.navigation.compose.rememberNavController
 import com.ronin71.pdfcustom.ui.theme.DarkCustomTheme
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 
@@ -17,9 +18,10 @@ class MainActivity : ComponentActivity() {
         PDFBoxResourceLoader.init(applicationContext)
         setContent {
             DarkCustomTheme {
+                val navController = rememberNavController()
 //                MainScreen()
 //                 DemoDecodeBitmap()
-                AppNavigation()
+                AppNavigation(navController)
             }
         }
     }
@@ -29,6 +31,6 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MainPreview() {
     DarkCustomTheme {
-        AppNavigation()
+//        AppNavigation( )
     }
 }
