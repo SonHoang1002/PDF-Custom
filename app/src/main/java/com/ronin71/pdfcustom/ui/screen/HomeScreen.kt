@@ -1,5 +1,6 @@
 package com.ronin71.pdfcustom.ui.screen
 
+import android.net.Uri
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -37,41 +38,14 @@ import com.ronin71.pdfcustom.viewmodel.MyPdfViewModel
 
 @Composable
 fun HomeScreen(
-    viewModel: MyPdfViewModel = viewModel(),
-    onNavigateToPreview: (MyPdfModelMain) -> Unit
+    onNavigateToPreview: (uri: Uri) -> Unit
 ) {
-    val context = LocalContext.current
-    val isLoading by viewModel.isLoading.collectAsState()
-    val progress by viewModel.progress.collectAsState()
-    val currentPage by viewModel.currentPage.collectAsState()
-    val totalPages by viewModel.totalPages.collectAsState()
-    val pdfModel by viewModel.pdfModel.collectAsState()
-    val error by viewModel.error.collectAsState()
-
-    // Điều hướng khi có pdfModel
-    LaunchedEffect(pdfModel) {
-        pdfModel?.let {
-            Log.d("HomeScreen", "Điều hướng sang Preview: progress = ${progress.toInt()}")
-            onNavigateToPreview(it)
-            viewModel.clear()
-
-        }
-    }
-
-    // Hiển thị lỗi
-    LaunchedEffect(error) {
-        error?.let {
-            Toast.makeText(context, it, Toast.LENGTH_LONG).show()
-            viewModel.clearError()
-        }
-    }
-
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri ->
         uri?.let {
+            onNavigateToPreview(it)
             Log.d("HomeScreen", "Chọn file PDF: $uri")
-            viewModel.extractPdf(context, it)
         }
     }
 
@@ -101,51 +75,11 @@ fun HomeScreen(
                 ) {
                     Button(
                         onClick = { launcher.launch("application/pdf") },
-                        enabled = !isLoading
+
                     ) {
                         Icon(Icons.Filled.Add, null)
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("Import PDF")
-                    }
-
-                    if (isLoading) {
-                        Spacer(modifier = Modifier.height(24.dp))
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            // Progress bar
-                            CircularProgressIndicator(
-                                progress = { progress },
-                                modifier = Modifier.size(48.dp)
-                            )
-
-                            Spacer(modifier = Modifier.height(8.dp))
-
-                            // Phần trăm
-                            Text(
-                                text = "${(progress * 100).toInt()}%",
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-
-                            // Chi tiết trang
-                            if (totalPages > 0) {
-                                Text(
-                                    text = "Trang $currentPage / $totalPages",
-                                    fontSize = 14.sp,
-                                    color = Color.Gray
-                                )
-                            }
-
-                            // Trạng thái
-                            Text(
-                                text = getProcessingStatus(progress, currentPage, totalPages),
-                                fontSize = 12.sp,
-                                color = Color.Gray,
-                                modifier = Modifier.padding(top = 4.dp)
-                            )
-                        }
                     }
                 }
             }

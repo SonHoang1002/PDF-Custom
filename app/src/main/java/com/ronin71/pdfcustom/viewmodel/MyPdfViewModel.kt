@@ -1,25 +1,31 @@
 package com.ronin71.pdfcustom.viewmodel
 
-import android.content.Context
-import android.net.Uri
-import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.ronin71.pdfcustom.model.MyPdfModelMain
-import com.ronin71.pdfcustom.util.PdfAnalyzer
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlin.coroutines.cancellation.CancellationException
+import android.net.Uri
+import android.content.Context
+import android.util.Log
+import com.ronin71.pdfcustom.model.MyPageResult
+import com.ronin71.pdfcustom.model.MyPdfModelMain
+import com.ronin71.pdfcustom.model.MyPdfPage
+import com.ronin71.pdfcustom.util.MyPdfAnalyzer
+import java.io.File
 
 class MyPdfViewModel : ViewModel() {
+
+    private val TAG  = "MyPdfViewModel"
+    private val _loadedPages = MutableStateFlow<List<MyPdfPage>>(emptyList())
+    val loadedPages: StateFlow<List<MyPdfPage>> = _loadedPages.asStateFlow()
 
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
-    private val _progress = MutableStateFlow(0f)
-    val progress: StateFlow<Float> = _progress.asStateFlow()
+    private val _isLoadingMore = MutableStateFlow(false)
+    val isLoadingMore: StateFlow<Boolean> = _isLoadingMore.asStateFlow()
 
     private val _currentPage = MutableStateFlow(0)
     val currentPage: StateFlow<Int> = _currentPage.asStateFlow()
@@ -27,77 +33,143 @@ class MyPdfViewModel : ViewModel() {
     private val _totalPages = MutableStateFlow(0)
     val totalPages: StateFlow<Int> = _totalPages.asStateFlow()
 
-    private val _pdfModel = MutableStateFlow<MyPdfModelMain?>(null)
-    val pdfModel: StateFlow<MyPdfModelMain?> = _pdfModel.asStateFlow()
-
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
-    private var extractJob: Job? = null
-    private val pdfAnalyzer = PdfAnalyzer()
-    fun clear() {
-        _pdfModel.value = null
+    private val _hasMorePages = MutableStateFlow(true)
+    val hasMorePages: StateFlow<Boolean> = _hasMorePages.asStateFlow()
+
+    private val _nextPageIndex = MutableStateFlow(0)
+    val nextPageIndex: StateFlow<Int> = _nextPageIndex.asStateFlow()
+
+
+    // Constants
+    private val pageSize = 20
+
+    // Analyzer instance
+    private var _pdfAnalyzer: MyPdfAnalyzer? = null
+
+    fun initAnalyzer(pdfCacheFile: File, context: Context, uri: Uri) {
+        if (_pdfAnalyzer == null) {
+            _pdfAnalyzer = MyPdfAnalyzer(pdfCacheFile = pdfCacheFile, context = context, uri = uri)
+        }
     }
-    fun extractPdf(context: Context, uri: Uri) {
-        extractJob?.cancel()
 
-        extractJob = viewModelScope.launch(Dispatchers.IO) {
+    fun loadTotalPages() {
+        viewModelScope.launch {
+            _pdfAnalyzer?.let { analyzer ->
+                _totalPages.value = analyzer.getTotalPages()
+            }
+        }
+    }
+
+    fun loadFromCache(cacheModel: MyPdfModelMain) {
+        _loadedPages.value = cacheModel.pages
+        _totalPages.value = cacheModel.pages.size
+        _nextPageIndex.value = cacheModel.pages.size
+        _hasMorePages.value = false
+        _isLoading.value = false
+    }
+
+
+
+    fun loadInitialPages() {
+        if (_isLoading.value) return
+
+        viewModelScope.launch {
+            _isLoading.value = true
+            _loadedPages.value = emptyList()
+            _nextPageIndex.value = 0
+
             try {
-                _isLoading.value = true
-                _progress.value = 0f
-                _currentPage.value = 0
-                _error.value = null
-
-                val result = pdfAnalyzer.extractPdf(
-                    context = context,
-                    uri = uri,
-                    onProgress = { progressValue ->
-                        _progress.value = progressValue
-
-                        if (progressValue > 0.1f) {
-                            val totalPages =  _pdfModel.value?.pages?.size ?: 0
-                            if (totalPages > 0) {
-                                val processedPages = ((progressValue - 0.1f) / 0.9f * totalPages).toInt()
-                                _currentPage.value = processedPages.coerceIn(0, totalPages)
-                                _totalPages.value = totalPages
+                _pdfAnalyzer?.extractPdfFlow(startPage = 0, pageCount = pageSize)
+                    ?.collect { result ->
+                        when (result) {
+                            is MyPageResult.Page -> {
+                                _loadedPages.value = _loadedPages.value + result.page
+                                _currentPage.value = result.pageIndex + 1
+                                _nextPageIndex.value = result.pageIndex + 1
                             }
+                            is MyPageResult.Progress -> {
+                                // Có thể update progress nếu cần
+                            }
+                            else -> {}
                         }
-
-                        Log.d("PdfViewModel", "Progress: ${(progressValue * 100).toInt()}% - Trang: ${_currentPage.value}/${_totalPages.value}")
                     }
-                )
 
-                _pdfModel.value = result
-                Log.d("PdfViewModel", "Extract thành công: ${result.pages.size} trang")
+                _hasMorePages.value = _nextPageIndex.value < _totalPages.value
 
-            } catch (e: CancellationException) {
-                Log.d("PdfViewModel", "Extraction cancelled")
             } catch (e: Exception) {
-                Log.e("PdfViewModel", "Extraction error", e)
-                _error.value = "Lỗi: ${e.message}"
+                _error.value = e.message
             } finally {
                 _isLoading.value = false
             }
         }
     }
 
-    fun setCurrentPdfModel(model: MyPdfModelMain) {
-        _pdfModel.value = model
+    fun loadMorePages() {
+        if (_isLoadingMore.value || !_hasMorePages.value || _isLoading.value) return
+
+        viewModelScope.launch {
+            _isLoadingMore.value = true
+            try {
+                _pdfAnalyzer?.extractPdfFlow(startPage = _nextPageIndex.value, pageCount = pageSize)
+                    ?.collect { result ->
+                        when (result) {
+                            is MyPageResult.Page -> {
+                                _loadedPages.value = _loadedPages.value + result.page
+                                _currentPage.value = result.pageIndex + 1
+                                _nextPageIndex.value = result.pageIndex + 1
+                            }
+                            else -> {}
+                        }
+                    }
+
+                _hasMorePages.value = _nextPageIndex.value < _totalPages.value
+
+            } catch (e: Exception) {
+                _error.value = e.message
+            } finally {
+                _isLoadingMore.value = false
+            }
+        }
     }
 
-    fun resetState() {
-        _pdfModel.value = null
-        _progress.value = 0f
-        _currentPage.value = 0
-        _totalPages.value = 0
+    private suspend fun loadPages(startIndex: Int, count: Int) {
+        _pdfAnalyzer?.let { analyzer ->
+            val endIndex = minOf(startIndex + count, _totalPages.value)
+
+            for (i in startIndex until endIndex) {
+                val page = analyzer.generatePage(i)
+                _loadedPages.value = _loadedPages.value.toMutableList().apply {
+                    add(page)
+                }
+                _currentPage.value = i + 1
+                _nextPageIndex.value = i + 1
+            }
+
+            _hasMorePages.value = _nextPageIndex.value < _totalPages.value
+        }
     }
 
     fun clearError() {
         _error.value = null
     }
 
+    fun reset() {
+        _loadedPages.value = emptyList()
+        _isLoading.value = false
+        _isLoadingMore.value = false
+        _currentPage.value = 0
+        _totalPages.value = 0
+        _error.value = null
+        _hasMorePages.value = true
+        _nextPageIndex.value = 0
+    }
+
     override fun onCleared() {
         super.onCleared()
-        extractJob?.cancel()
+        _pdfAnalyzer?.close()
+        _pdfAnalyzer = null
     }
 }

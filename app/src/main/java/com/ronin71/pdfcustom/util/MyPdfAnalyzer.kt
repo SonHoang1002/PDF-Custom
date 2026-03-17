@@ -7,15 +7,10 @@ import android.graphics.RectF
 import android.net.Uri
 import android.provider.DocumentsContract
 import android.util.Log
-import android.util.Size
 import android.util.SizeF
-import androidx.compose.ui.graphics.Color
-import androidx.core.graphics.blue
-import androidx.core.graphics.green
-import androidx.core.graphics.red
-import com.ronin71.pdfcustom.model.MyCustomPdfAnalysis
+import androidx.core.graphics.createBitmap
+import com.ronin71.pdfcustom.model.MyPageResult
 import com.ronin71.pdfcustom.model.MyPdfImage
-import com.ronin71.pdfcustom.model.MyPdfModel
 import com.ronin71.pdfcustom.model.MyPdfModelMain
 import com.ronin71.pdfcustom.model.MyPdfPage
 import com.ronin71.pdfcustom.model.MyPdfParagraph
@@ -26,120 +21,199 @@ import com.tom_roush.pdfbox.rendering.PDFRenderer
 import com.tom_roush.pdfbox.text.PDFTextStripper
 import com.tom_roush.pdfbox.text.TextPosition
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 import java.io.File
-import kotlin.math.min
-import androidx.core.graphics.createBitmap
+import java.io.FileOutputStream
 
 
-class PdfAnalyzer {
+class MyPdfAnalyzer(val pdfCacheFile: File, val context: Context, val uri: Uri) {
 
     val TAG = "PdfAnalyzer"
 
+    // Document và renderer dùng chung
+    private var _document: PDDocument
+    private var _renderer: PDFRenderer
+    private var _totalPages: Int = 0
+
+    init {
+        try {
+            _document = PDDocument.load(pdfCacheFile)
+            _renderer = PDFRenderer(_document)
+            _totalPages = _document.numberOfPages
+            Log.d(TAG, "PDF Document loaded: $_totalPages pages")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error loading PDF: ${e.message}")
+            throw e
+        }
+    }
+
+    // Lấy tổng số trang
+    suspend fun getTotalPages(): Int = withContext(Dispatchers.IO) {
+        return@withContext _totalPages
+    }
+
+    // Extract toàn bộ PDF (dùng cho cache)
     suspend fun extractPdf(
-        context: Context,
         uri: Uri,
         onProgress: (Float) -> Unit
     ): MyPdfModelMain = withContext(Dispatchers.IO) {
-        val id = DocumentsContract.getDocumentId(uri).substringAfter(":", "")
         Log.d(TAG, "=== BẮT ĐẦU XỬ LÝ PDF ===")
         Log.d(TAG, "URI: $uri")
-        Log.d(TAG, "ID: $id")
 
-        val pdfCacheFile = copyUriToCache(context, uri, id)
-            ?: throw Exception("Cannot copy file to cache")
-
-        Log.d(TAG, "File cache: ${pdfCacheFile.absolutePath}")
-        Log.d(TAG, "File size: ${pdfCacheFile.length()} bytes")
-
-        val file = File(pdfCacheFile.path)
         val pages = ArrayList<MyPdfPage>()
+        val totalPages = _totalPages
 
-        PDDocument.load(file).use { document ->
-            val totalPages = document.numberOfPages
-            Log.d(TAG, "Tổng số trang: $totalPages")
+        onProgress(0.1f)
 
-            // Khởi tạo PDFRenderer để render bitmap
-            val renderer = PDFRenderer(document)
+        for (pageIndex in 0 until totalPages) {
+            Log.d(TAG, "--- Đang xử lý trang ${pageIndex + 1}/$totalPages ---")
 
-            // Copy file xong => 10%
-            onProgress(0.1f)
+            try {
+                val page = _document.getPage(pageIndex)
+                val pageSize = SizeF(page.mediaBox.width, page.mediaBox.height)
+                Log.d(TAG, "Kích thước trang: ${pageSize.width} x ${pageSize.height}")
 
-            for (pageIndex in 0 until totalPages) {
-                Log.d(TAG, "--- Đang xử lý trang ${pageIndex + 1}/$totalPages ---")
+                // Render bitmap
+                val bitmapPage = _renderer.renderImageWithDPI(pageIndex, 72f)
+                Log.d(TAG, "  Đã render bitmap: ${bitmapPage.width}x${bitmapPage.height}")
 
-                try {
-                    val page = document.getPage(pageIndex)
-                    val pageSize = getPageSize(page)
-                    Log.d(TAG, "Kích thước trang: ${pageSize.width} x ${pageSize.height}")
-
-                    val bitmapPage = renderer.renderImageWithDPI(pageIndex, 72f)
-                    Log.d(TAG, "  Đã render bitmap: ${bitmapPage.width}x${bitmapPage.height}")
-
-                    // Extract text
-                    val textsWithPosition = try {
-                        extractTextWithPosition(document, pageIndex).also { texts ->
-                            Log.d(TAG, "  Trang ${pageIndex + 1}: Tìm thấy ${texts.size} paragraphs")
-                        }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "  Lỗi extract text: ${e.message}")
-                        emptyList()
+                // Extract text
+                val textsWithPosition = try {
+                    extractTextWithPosition(_document, pageIndex).also { texts ->
+                        Log.d(TAG, "  Trang ${pageIndex + 1}: Tìm thấy ${texts.size} paragraphs")
                     }
-
-                    // Extract images
-                    val imagesWithPosition = try {
-                        extractImagesWithPosition(page).also { images ->
-                            Log.d(TAG, "  Trang ${pageIndex + 1}: Tìm thấy ${images.size} images")
-                        }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "  Lỗi extract images: ${e.message}")
-                        emptyList()
-                    }
-
-                    pages.add(
-                        MyPdfPage(
-                            size = pageSize,
-                            texts = ArrayList(textsWithPosition),
-                            images = ArrayList(imagesWithPosition),
-                            bitmapPage = bitmapPage // THÊM BITMAP VÀO ĐÂY
-                        )
-                    )
-
-                    // Tính progress
-                    val progress = 0.1f + (0.9f * (pageIndex + 1) / totalPages)
-                    onProgress(progress)
-
-                    Log.d(TAG, "✅ Hoàn thành trang ${pageIndex + 1}/$totalPages")
-
                 } catch (e: Exception) {
-                    Log.e(TAG, "❌ Lỗi xử lý trang ${pageIndex + 1}: ${e.message}")
-
-                    // Tạo bitmap trắng khi lỗi
-                    val defaultBitmap = createBitmap(595, 842).apply {
-                        eraseColor(android.graphics.Color.WHITE)
-                    }
-
-                    pages.add(
-                        MyPdfPage(
-                            size = SizeF(595f, 842f),
-                            texts = ArrayList(),
-                            images = ArrayList(),
-                            bitmapPage = defaultBitmap
-                        )
-                    )
-
-                    val progress = 0.1f + (0.9f * (pageIndex + 1) / totalPages)
-                    onProgress(progress)
+                    Log.e(TAG, "  Lỗi extract text: ${e.message}")
+                    emptyList()
                 }
-            }
 
-            Log.d(TAG, "=== KẾT THÚC ===")
-            Log.d(TAG, "Tổng số trang: ${pages.size}")
+                // Extract images
+                val imagesWithPosition = try {
+                    extractImagesWithPosition(page).also { images ->
+                        Log.d(TAG, "  Trang ${pageIndex + 1}: Tìm thấy ${images.size} images")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "  Lỗi extract images: ${e.message}")
+                    emptyList()
+                }
+
+                pages.add(
+                    MyPdfPage(
+                        size = pageSize,
+                        texts = ArrayList(textsWithPosition),
+                        images = ArrayList(imagesWithPosition),
+                        bitmapPage = bitmapPage
+                    )
+                )
+
+                val progress = 0.1f + (0.9f * (pageIndex + 1) / totalPages)
+                onProgress(progress)
+
+                Log.d(TAG, "✅ Hoàn thành trang ${pageIndex + 1}/$totalPages")
+
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Lỗi xử lý trang ${pageIndex + 1}: ${e.message}")
+
+                val defaultBitmap = createBitmap(595, 842).apply {
+                    eraseColor(android.graphics.Color.WHITE)
+                }
+
+                pages.add(
+                    MyPdfPage(
+                        size = SizeF(595f, 842f),
+                        texts = ArrayList(),
+                        images = ArrayList(),
+                        bitmapPage = defaultBitmap
+                    )
+                )
+
+                val progress = 0.1f + (0.9f * (pageIndex + 1) / totalPages)
+                onProgress(progress)
+            }
         }
+
+        Log.d(TAG, "=== KẾT THÚC ===")
+        Log.d(TAG, "Tổng số trang: ${pages.size}")
 
         return@withContext MyPdfModelMain(uri, pages)
     }
 
+    // Flow để generate từng page
+    suspend fun extractPdfFlow(
+        startPage: Int = 0,
+        pageCount: Int = Int.MAX_VALUE
+    ): Flow<MyPageResult> = flow {
+        val totalPages = _totalPages
+        val endPage = minOf(startPage + pageCount, totalPages)
+
+        if (startPage == 0) {
+            emit(MyPageResult.Progress(0.1f))
+        }
+
+        for (pageIndex in startPage until endPage) {
+            try {
+                Log.d(TAG, "🔄 Generate trang $pageIndex")
+
+                val page = generatePage(pageIndex)
+                emit(MyPageResult.Page(pageIndex, page))
+
+                val progress = 0.1f + (0.9f * (pageIndex + 1) / totalPages)
+                emit(MyPageResult.Progress(progress))
+
+            } catch (e: Exception) {
+                Log.e(TAG, "Lỗi xử lý trang $pageIndex", e)
+
+                val defaultBitmap = createBitmap(595, 842).apply {
+                    eraseColor(android.graphics.Color.WHITE)
+                }
+
+                val errorPage = MyPdfPage(
+                    size = SizeF(595f, 842f),
+                    texts = ArrayList(),
+                    images = ArrayList(),
+                    bitmapPage = defaultBitmap
+                )
+                emit(MyPageResult.Page(pageIndex, errorPage))
+            }
+        }
+    }.flowOn(Dispatchers.IO)
+
+    // Generate một trang cụ thể
+    suspend fun generatePage(pageIndex: Int): MyPdfPage = withContext(Dispatchers.IO) {
+        val page = _document.getPage(pageIndex)
+        val pageSize = SizeF(page.mediaBox.width, page.mediaBox.height)
+
+        // Render bitmap
+        val bitmapPage = _renderer.renderImageWithDPI(pageIndex, 72f)
+
+        // Extract text
+        val textsWithPosition = extractTextWithPosition(_document, pageIndex)
+
+        // Extract images
+        val imagesWithPosition = extractImagesWithPosition(page)
+
+        MyPdfPage(
+            size = pageSize,
+            texts = ArrayList(textsWithPosition),
+            images = ArrayList(imagesWithPosition),
+            bitmapPage = bitmapPage
+        )
+    }
+
+    // Generate nhiều trang cùng lúc
+    suspend fun generatePages(pageIndices: List<Int>): List<MyPdfPage> =
+        withContext(Dispatchers.IO) {
+            val pages = mutableListOf<MyPdfPage>()
+            for (index in pageIndices) {
+                pages.add(generatePage(index))
+            }
+            return@withContext pages
+        }
+
+    // Extract text với vị trí
     private fun extractTextWithPosition(
         document: PDDocument,
         pageIndex: Int
@@ -236,6 +310,7 @@ class PdfAnalyzer {
         return paragraphs
     }
 
+    // Extract images với vị trí
     private fun extractImagesWithPosition(page: PDPage): List<MyPdfImage> {
         val images = mutableListOf<MyPdfImage>()
         var imageCount = 0
@@ -243,7 +318,6 @@ class PdfAnalyzer {
         try {
             val resources = page.resources
             val xObjectNames = resources.xObjectNames
-
 
             for (xObjectName in xObjectNames) {
                 try {
@@ -256,7 +330,7 @@ class PdfAnalyzer {
                         inputStream.close()
 
                         if (bitmap != null) {
-                            val position = getImagePosition(page, xObjectName.name)
+                            val position = getImagePosition(page)
                             images.add(
                                 MyPdfImage(
                                     bitmap = bitmap,
@@ -278,35 +352,40 @@ class PdfAnalyzer {
         return images
     }
 
-    private fun getImagePosition(page: PDPage, imageName: String): RectF {
+    // Lấy vị trí image (mặc định full page)
+    private fun getImagePosition(page: PDPage): RectF {
         val mediaBox = page.mediaBox
         return RectF(0f, 0f, mediaBox.width, mediaBox.height)
     }
 
-    private fun getPageSize(page: PDPage): SizeF {
-        val mediaBox = page.mediaBox
-        return SizeF(mediaBox.width, mediaBox.height)
-    }
-
-    fun copyUriToCache(context: Context, uri: Uri, id: String): File? {
-        return try {
-            val fileName = "imported_${id}.pdf"
-            val file = File(context.cacheDir, fileName)
-            val contentResolver = context.contentResolver
-
-            contentResolver.openInputStream(uri)?.use { input ->
-                file.outputStream().use { output ->
-                    input.copyTo(output)
-                }
-            } ?: return null
-
-            Log.d(TAG, "Copied PDF to cache: ${file.absolutePath}")
-            file
+    // Giải phóng tài nguyên
+    fun close() {
+        try {
+            _document.close()
+            Log.d(TAG, "PDF Document closed")
         } catch (e: Exception) {
-            Log.e(TAG, "copyUriToCache error: ${e.message}")
-            null
+            Log.e(TAG, "Error closing document: ${e.message}")
         }
     }
 }
 
+fun copyUriToCache(context: Context, uri: Uri): File? {
+    return try {
+        val id = DocumentsContract.getDocumentId(uri).substringAfter(":", "")
+        val fileName = "imported_${id}.pdf"
+        val file = File(context.cacheDir, fileName)
+        val contentResolver = context.contentResolver
 
+        contentResolver.openInputStream(uri)?.use { input ->
+            FileOutputStream(file).use { output ->
+                input.copyTo(output)
+            }
+        } ?: return null
+
+        Log.d("copyUriToCache", "Copied PDF to cache: ${file.absolutePath}")
+        file
+    } catch (e: Exception) {
+        Log.e("copyUriToCache", "copyUriToCache error: ${e.message}")
+        null
+    }
+}
